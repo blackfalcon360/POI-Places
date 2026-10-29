@@ -927,6 +927,36 @@ public class MainActivity extends Activity implements LocClient.Cb {
         toast(tr("Saved \u2713", "محفوظ ہو گیا \u2713", "تم الحفظ \u2713"));
     }
 
+    /** Save every place currently listed in the Nearby tab, skipping places already saved. */
+    private void saveAllNearbyPlaces() {
+        if (nearAd == null || nearAd.getCount() == 0) {
+            toast(tr("No nearby places to save.", "محفوظ کرنے کے لیے کوئی قریبی مقام نہیں۔",
+                    "لا توجد أماكن قريبة لحفظها."));
+            return;
+        }
+        Db db = Db.get(this);
+        int added = 0;
+        int alreadySaved = 0;
+        for (Row row : nearAd.items) {
+            Place p = row.place;
+            if (p == null) continue;
+            Poi poi = new Poi(labelOf(p), p.lat, p.lon);
+            poi.cat = "service".equals(p.kind) && Cat.isPoiCode(p.sub) ? p.sub : "general";
+            poi.time = System.currentTimeMillis();
+            if (db.poiExists(poi.name, poi.lat, poi.lon)) {
+                alreadySaved++;
+            } else {
+                db.addPoi(poi);
+                added++;
+            }
+        }
+        final String message = String.format(Locale.US,
+                tr("Saved %1$d places; %2$d were already saved.",
+                   "%1$d مقامات محفوظ ہوئے؛ %2$d پہلے سے محفوظ تھے۔",
+                   "تم حفظ %1$d مكانًا؛ %2$d محفوظة مسبقًا."), added, alreadySaved);
+        toast(message);
+    }
+
     // ------------------------------------------------------------------ Nearby tab
 
     private View buildNearby() {
@@ -955,6 +985,12 @@ public class MainActivity extends Activity implements LocClient.Cb {
         LinearLayout.LayoutParams up = new LinearLayout.LayoutParams(MATCH, WRAP);
         up.setMargins(dp(3), dp(6), dp(3), 0);
         h.addView(upd, up);
+
+        TextView saveAll = button(tr("Save all nearby places", "تمام قریبی مقامات محفوظ کریں",
+                "حفظ جميع الأماكن القريبة"), ARROW_COLOR, 0xFFFFFFFF, v -> saveAllNearbyPlaces());
+        LinearLayout.LayoutParams saveAllParams = new LinearLayout.LayoutParams(MATCH, WRAP);
+        saveAllParams.setMargins(dp(3), dp(6), dp(3), 0);
+        h.addView(saveAll, saveAllParams);
 
         nearInfo = tv("", 13, sub, false);
         nearInfo.setPadding(dp(4), dp(8), dp(4), dp(2));
