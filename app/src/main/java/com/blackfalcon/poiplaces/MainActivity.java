@@ -62,6 +62,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final int ACC = 0xFF00BFA5;
+    // Tropical Rainforest green, used for the live direction arrows.
+    private static final int ARROW_COLOR = 0xFF00755E;
     private static final int ON_ACC = 0xFF000000;
     private static final int RC_PERM = 100;
     private static final int RC_BG = 101;
@@ -91,8 +93,6 @@ public class MainActivity extends Activity implements LocClient.Cb {
         TextView sub;
         TextView dist;
         TextView act;
-        double lat;
-        double lon;
     }
 
     // screen parts
@@ -123,8 +123,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
     private float cosSm = 1;
     private boolean smInit = false;
     private float declination = 0;
-    private float currentHeading = 0f;
     private long lastSensorUi = 0;
+    private long lastArrowUi = 0;
     private long lastListUi = 0;
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
 
@@ -264,12 +264,14 @@ public class MainActivity extends Activity implements LocClient.Cb {
         return t;
     }
 
+    /** Adds an equal-width button to a horizontal row. The row itself must be added with MATCH_PARENT width. */
     private void addBtn(LinearLayout row, String label, int bgColor, int fg, View.OnClickListener l) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, WRAP, 1f);
         p.setMargins(dp(3), 0, dp(3), 0);
         row.addView(button(label, bgColor, fg, l), p);
     }
 
+    /** Full-width button added to a vertical box. */
     private void addWide(LinearLayout box, String label, int bgColor, int fg, View.OnClickListener l) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(MATCH, WRAP);
         p.setMargins(0, dp(8), 0, 0);
@@ -367,6 +369,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
         return lv;
     }
 
+    /** Text box: typed text is black on white in both themes. */
     private EditText input(String hint, boolean multi) {
         EditText e = new EditText(this);
         e.setHint(hint);
@@ -393,7 +396,9 @@ public class MainActivity extends Activity implements LocClient.Cb {
     private void runBg(Runnable r) {
         try {
             pool.execute(r);
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+            // the screen is closing
+        }
     }
 
     // ------------------------------------------------------------------ permissions and service
@@ -436,7 +441,9 @@ public class MainActivity extends Activity implements LocClient.Cb {
             } else {
                 startService(i);
             }
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+            // Android did not allow the service to start now
+        }
     }
 
     @TargetApi(26)
@@ -447,7 +454,9 @@ public class MainActivity extends Activity implements LocClient.Cb {
     private void stopTrackService() {
         try {
             stopService(new Intent(this, TrackService.class));
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+            // not running
+        }
     }
 
     private void requestBackgroundLocation() {
@@ -488,6 +497,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
 
     // ------------------------------------------------------------------ location callbacks, place name, compass
 
+    /** New position (main thread). */
     @Override
     public void onFix() {
         updateHeader();
@@ -519,7 +529,9 @@ public class MainActivity extends Activity implements LocClient.Cb {
             Namer.Info i = null;
             try {
                 i = Where.describe(MainActivity.this, lat, lon);
-            } catch (Exception ignore) {}
+            } catch (Exception ignore) {
+                // keep the old name
+            }
             final Namer.Info fi = i;
             runUi(() -> {
                 namerBusy = false;
@@ -601,6 +613,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
             } else {
                 return;
             }
+            // flat phone: the top edge points to the heading; upright phone: the back points to it
             double az;
             if (Math.abs(r[8]) > 0.7) az = Math.atan2(r[1], r[4]);
             else az = Math.atan2(-r[2], -r[5]);
@@ -618,19 +631,20 @@ public class MainActivity extends Activity implements LocClient.Cb {
             if (now - lastSensorUi < 60) return;
             lastSensorUi = now;
             float h = (float) ((Math.toDegrees(Math.atan2(sinSm, cosSm)) + 360.0) % 360.0);
-            currentHeading = h;
             if (compass != null) compass.setHeading(h);
-            updateAllRowRotations(h);
+            // Refresh visible list arrows at a modest rate so they follow the live compass
+            // without forcing a full list redraw for every sensor sample.
+            if (now - lastArrowUi >= 200) {
+                lastArrowUi = now;
+                if (nearAd != null) nearAd.notifyDataSetChanged();
+                if (savedAd != null) savedAd.notifyDataSetChanged();
+            }
         }
 
         @Override
-        public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
     };
-
-    private void updateAllRowRotations(float heading) {
-        if (nearAd != null) nearAd.updateRotations(heading);
-        if (savedAd != null) savedAd.updateRotations(heading);
-    }
 
     private float[] lowPass(float[] old, float[] cur) {
         if (old == null) return cur.clone();
@@ -638,6 +652,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
         return old;
     }
 
+    /** Small compass: the dial turns so that N points to true north; the pointer on top is where the phone faces. */
     private class CompassView extends View {
         private float heading = 0;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -711,6 +726,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
         root.setBackgroundColor(bg);
         root.setLayoutDirection(rtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
 
+        // top: current place name + small compass
         LinearLayout head = hbox();
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setPadding(dp(12), dp(8), dp(10), dp(4));
@@ -786,6 +802,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
         else if (cur == 2) refreshPacks();
     }
 
+    // ------------------------------------------------------------------ list rows
+
     private String labelOf(Place p) {
         return p.label(Store.lang(this));
     }
@@ -802,25 +820,10 @@ public class MainActivity extends Activity implements LocClient.Cb {
 
     private class RowAdapter extends BaseAdapter {
         private List<Row> items = new ArrayList<Row>();
-        private final List<Holder> activeHolders = new ArrayList<Holder>();
 
         void set(List<Row> l) {
             items = l;
-            activeHolders.clear();
             notifyDataSetChanged();
-        }
-
-        void updateRotations(float heading) {
-            for (Holder h : activeHolders) {
-                if (h.arrow != null) {
-                    float rot = 0f;
-                    if (LocState.has) {
-                        double b = Geo.bearing(LocState.lat, LocState.lon, h.lat, h.lon);
-                        rot = (float) (b - heading);
-                    }
-                    h.arrow.setRotation(rot);
-                }
-            }
         }
 
         @Override
@@ -852,29 +855,22 @@ public class MainActivity extends Activity implements LocClient.Cb {
                 row.setPadding(dp(8), dp(9), dp(4), dp(9));
                 row.setBackground(rounded(card, 12));
                 outer.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
-
                 h.icon = tv("", 24, txt, false);
                 h.icon.setGravity(Gravity.CENTER);
                 row.addView(h.icon, new LinearLayout.LayoutParams(dp(40), WRAP));
-
-                h.arrow = tv("\u2191", 24, ACC, true);
+                h.arrow = tv("\u2191", 30, ARROW_COLOR, true);
                 h.arrow.setGravity(Gravity.CENTER);
-                LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(dp(30), WRAP);
-                ap.setMargins(dp(2), 0, dp(4), 0);
-                row.addView(h.arrow, ap);
-
+                row.addView(h.arrow, new LinearLayout.LayoutParams(dp(34), dp(44)));
                 LinearLayout col = vbox();
                 LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, WRAP, 1f);
-                cp.setMarginStart(dp(4));
+                cp.setMarginStart(dp(6));
                 row.addView(col, cp);
-
                 h.title = tv("", 15, txt, true);
                 h.sub = tv("", 12, sub, false);
                 h.dist = tv("", 12, ACC, false);
                 col.addView(h.title);
                 col.addView(h.sub);
                 col.addView(h.dist);
-
                 h.act = tv("", 22, ACC, true);
                 h.act.setGravity(Gravity.CENTER);
                 h.act.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -888,36 +884,27 @@ public class MainActivity extends Activity implements LocClient.Cb {
             } else {
                 h = (Holder) cv.getTag();
             }
-
             Row r = items.get(pos);
             h.icon.setText(r.icon);
             h.title.setText(r.title);
             h.sub.setText(r.sub);
             h.sub.setVisibility(r.sub.length() > 0 ? View.VISIBLE : View.GONE);
-            h.lat = r.lat;
-            h.lon = r.lon;
-
             if (LocState.has) {
+                double bearing = Geo.bearing(LocState.lat, LocState.lon, r.lat, r.lon);
                 double d = Geo.km(LocState.lat, LocState.lon, r.lat, r.lon);
-                int s = Geo.sector(Geo.bearing(LocState.lat, LocState.lon, r.lat, r.lon));
+                int s = Geo.sector(bearing);
                 h.dist.setText(L.dist(MainActivity.this, d) + "  \u00B7  " + L.dir(MainActivity.this, s));
                 h.dist.setVisibility(View.VISIBLE);
-
-                double b = Geo.bearing(LocState.lat, LocState.lon, r.lat, r.lon);
-                h.arrow.setRotation((float) (b - currentHeading));
                 h.arrow.setVisibility(View.VISIBLE);
+                h.arrow.setTextColor(ARROW_COLOR);
+                h.arrow.setRotation((float) (bearing - (compass != null ? compass.heading : 0f)));
             } else {
                 h.dist.setVisibility(View.GONE);
-                h.arrow.setVisibility(View.GONE);
+                h.arrow.setVisibility(View.INVISIBLE);
+                h.arrow.setRotation(0f);
             }
-
             h.act.setText(r.poi != null ? "\u22EE" : "+");
             h.act.setTag(r);
-
-            if (!activeHolders.contains(h)) {
-                activeHolders.add(h);
-            }
-
             return cv;
         }
     }
@@ -939,6 +926,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
         db.addPoi(poi);
         toast(tr("Saved \u2713", "محفوظ ہو گیا \u2713", "تم الحفظ \u2713"));
     }
+
+    // ------------------------------------------------------------------ Nearby tab
 
     private View buildNearby() {
         ListView lv = newList();
@@ -1018,6 +1007,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
                 out.add(r);
             }
             Collections.sort(out, (a, b) -> Double.compare(a.dist, b.dist));
+            // drop duplicates (the same place from the built-in list and a download)
             Set<String> seen = new HashSet<String>();
             final ArrayList<Row> shown = new ArrayList<Row>();
             for (Row r : out) {
@@ -1043,6 +1033,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
             });
         });
     }
+
+    // ------------------------------------------------------------------ Saved tab
 
     private View buildSaved() {
         ListView lv = newList();
@@ -1143,6 +1135,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
         String name = info == null || info.place == null ? "" : Where.title(this, info);
         showPoiDialog(null, LocState.lat, LocState.lon, name, "general", false);
     }
+
+    // ------------------------------------------------------------------ POI dialogs
 
     private Dialog makeDialog(View contentView) {
         Dialog d = new Dialog(this);
@@ -1343,6 +1337,8 @@ public class MainActivity extends Activity implements LocClient.Cb {
         showWide(d);
     }
 
+    // ------------------------------------------------------------------ import and export
+
     private void chooseExportFormat() {
         LinearLayout box = vbox();
         box.setBackground(rounded(card, 16));
@@ -1393,3 +1389,334 @@ public class MainActivity extends Activity implements LocClient.Cb {
             });
         });
     }
+
+    private void startImport() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            startActivityForResult(i, RC_IMPORT);
+            toast(tr("Choose a GPX, KML, GeoJSON or CSV file. The format is detected automatically.",
+                    "GPX، KML، GeoJSON یا CSV فائل چنیں۔ فارمیٹ خود پہچانا جاتا ہے۔",
+                    "اختر ملف GPX أو KML أو GeoJSON أو CSV. يتم اكتشاف الصيغة تلقائيًا."));
+        } catch (Exception e) {
+            toast(tr("No file manager found.", "کوئی فائل مینیجر نہیں ملا۔", "لا يوجد مدير ملفات."));
+        }
+    }
+
+    private byte[] readAll(InputStream in, int max) throws IOException {
+        if (in == null) throw new IOException("cannot open file");
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        byte[] buf = new byte[16384];
+        int n;
+        int total = 0;
+        while ((n = in.read(buf)) > 0) {
+            total += n;
+            if (total > max) throw new IOException("file is too large");
+            bo.write(buf, 0, n);
+        }
+        in.close();
+        return bo.toByteArray();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RC_EXPORT && resultCode != RESULT_OK) pendingExport = null;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        if (requestCode == RC_EXPORT) {
+            final String text = pendingExport;
+            pendingExport = null;
+            if (text == null) return;
+            runBg(() -> {
+                try {
+                    OutputStream os = getContentResolver().openOutputStream(uri, "wt");
+                    if (os == null) throw new IOException("cannot open file");
+                    os.write(text.getBytes("UTF-8"));
+                    os.close();
+                    runUi(() -> toast(tr("File saved.", "فائل محفوظ ہو گئی۔", "تم حفظ الملف.")));
+                } catch (Exception e) {
+                    final String msg = String.valueOf(e.getMessage());
+                    runUi(() -> toast(tr("Could not save the file: ", "فائل محفوظ نہیں ہو سکی: ", "تعذّر حفظ الملف: ") + msg));
+                }
+            });
+        } else if (requestCode == RC_IMPORT) {
+            runBg(() -> {
+                try {
+                    byte[] bytes = readAll(getContentResolver().openInputStream(uri), 30 * 1024 * 1024);
+                    Formats.ImportResult r = Formats.parse(new String(bytes, "UTF-8"));
+                    int added = Db.get(MainActivity.this).importPois(r.pois);
+                    final String msg = String.format(Locale.US, tr(
+                            "Imported %1$d points from %2$s. Already saved: %3$d. Not usable: %4$d.",
+                            "%2$s سے %1$d مقامات امپورٹ ہوئے۔ پہلے سے محفوظ: %3$d۔ ناقابلِ استعمال: %4$d۔",
+                            "تم استيراد %1$d نقطة من %2$s. محفوظة مسبقًا: %3$d. غير صالحة: %4$d."),
+                            added, r.format.toUpperCase(Locale.US), r.pois.size() - added, r.skipped);
+                    runUi(() -> {
+                        toast(msg);
+                        loadSaved();
+                    });
+                } catch (Exception e) {
+                    final String m = String.valueOf(e.getMessage());
+                    runUi(() -> toast(tr("Could not read this file: ", "یہ فائل نہیں پڑھی جا سکی: ", "تعذّرت قراءة الملف: ") + m));
+                }
+            });
+        }
+    }
+
+    // ------------------------------------------------------------------ Offline tab
+
+    private View buildOffline() {
+        ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(bg);
+        LinearLayout box = vbox();
+        box.setPadding(dp(12), dp(10), dp(12), dp(16));
+        sv.addView(box);
+
+        LinearLayout s1 = section(box, tr("Built-in cities", "بلٹ اِن شہر", "مدن مضمّنة"));
+        note(s1, String.format(Locale.US, tr(
+                "%d major cities are included (approximate positions). They give a rough place name anywhere, with no download.",
+                "%d بڑے شہر شامل ہیں (تقریبی مقام)۔ یہ ڈاؤن لوڈ کے بغیر کہیں بھی موٹا اندازہ دیتے ہیں۔",
+                "تتضمن %d مدينة كبرى (مواقع تقريبية). تعطي اسمًا تقريبيًا للمكان في أي مكان دون تنزيل."),
+                Cities.all().size()));
+
+        LinearLayout s2 = section(box, tr("Downloaded areas", "ڈاؤن لوڈ شدہ علاقے", "المناطق المنزَّلة"));
+        packsBox = vbox();
+        s2.addView(packsBox, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        LinearLayout s3 = section(box, tr("Download around your position", "اپنے مقام کے آس پاس ڈاؤن لوڈ کریں",
+                "تنزيل ما حول موقعك"));
+        final String[] scopeV = {"settlements", "services", "both"};
+        addChips(s3, new String[]{tr("Cities & villages", "شہر اور گاؤں", "مدن وقرى"), tr("Services", "سہولیات", "خدمات"),
+                tr("Both", "دونوں", "الاثنان")}, indexOf(scopeV, dlScope), k -> dlScope = scopeV[k]);
+        final int[] radV = {10, 25, 50};
+        String km = tr("km", "کلومیٹر", "كم");
+        String[] radL = new String[radV.length];
+        for (int i = 0; i < radV.length; i++) radL[i] = radV[i] + " " + km;
+        addChips(s3, radL, indexOfInt(radV, dlRadius), k -> dlRadius = radV[k]);
+        addWide(s3, tr("Download", "ڈاؤن لوڈ", "تنزيل"), ACC, ON_ACC, v -> startDownload(dlScope, dlRadius));
+        dlStatus = note(s3, tr("Needs internet. Data comes from OpenStreetMap. The server receives the center of the area (your approximate position). Large areas can time out; try 10\u201325 km.",
+                "انٹرنیٹ ضروری ہے۔ ڈیٹا OpenStreetMap سے آتا ہے۔ سرور کو علاقے کا مرکز (آپ کا تقریبی مقام) ملتا ہے۔ بڑے علاقے ٹائم آؤٹ ہو سکتے ہیں؛ 10\u201325 کلومیٹر آزمائیں۔",
+                "يلزم الإنترنت. البيانات من OpenStreetMap. يستقبل الخادم مركز المنطقة (موقعك التقريبي). قد تنتهي مهلة المناطق الكبيرة؛ جرّب 10\u201325 كم."));
+        return sv;
+    }
+
+    private void setDlStatus(String s) {
+        if (dlStatus != null && cur == 2) dlStatus.setText(s);
+        else toast(s);
+    }
+
+    private void refreshPacks() {
+        if (packsBox == null || cur != 2) return;
+        runBg(() -> {
+            final List<Db.Pack> packs = Db.get(MainActivity.this).packs();
+            final int total = Db.get(MainActivity.this).placeCount();
+            runUi(() -> {
+                if (packsBox == null || cur != 2) return;
+                packsBox.removeAllViews();
+                TextView sum = tv(String.format(Locale.US, tr("Places stored from downloads: %d",
+                        "ڈاؤن لوڈ سے محفوظ مقامات: %d", "الأماكن المخزنة من التنزيلات: %d"), total), 13, txt, false);
+                sum.setPadding(0, dp(6), 0, dp(4));
+                packsBox.addView(sum);
+                if (packs.isEmpty()) {
+                    packsBox.addView(tv(tr("Nothing downloaded yet.", "ابھی کچھ ڈاؤن لوڈ نہیں ہوا۔", "لم يتم تنزيل شيء بعد."),
+                            12, sub, false));
+                }
+                for (final Db.Pack p : packs) {
+                    TextView t = tv(String.format(Locale.US, tr("%1$s \u00B7 %2$s \u00B7 %3$d places \u00B7 %4$s",
+                            "%1$s \u00B7 %2$s \u00B7 %3$d مقامات \u00B7 %4$s", "%1$s \u00B7 %2$s \u00B7 %3$d مكانًا \u00B7 %4$s"),
+                            p.label, L.dist(MainActivity.this, p.radius),
+                            p.count, new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(p.time))), 13, txt, false);
+                    t.setPadding(0, dp(10), 0, 0);
+                    packsBox.addView(t);
+                    addWide(packsBox, tr("Delete this area", "یہ علاقہ حذف کریں", "حذف هذه المنطقة"), chipBg, txt, v ->
+                            confirm(tr("Delete downloaded area?", "ڈاؤن لوڈ شدہ علاقہ حذف کریں؟", "حذف المنطقة المنزَّلة؟"),
+                                    tr("Its places will be removed from the offline data.", "اس کے مقامات آف لائن ڈیٹا سے ہٹا دیے جائیں گے۔",
+                                            "ستتم إزالة أماكنها من البيانات دون اتصال."),
+                                    tr("Delete", "حذف کریں", "حذف"), () -> runBg(() -> {
+                                        Db.get(MainActivity.this).deletePack(p.id);
+                                        runUi(() -> {
+                                            requestNamer(true);
+                                            refreshPacks();
+                                        });
+                                    })));
+                }
+            });
+        });
+    }
+
+    private void startDownload(final String scope, final int radiusKm) {
+        if (!Store.online(this)) {
+            toast(tr("Online features are turned off in Settings.", "آن لائن فیچرز سیٹنگز میں بند ہیں۔",
+                    "الميزات عبر الإنترنت متوقفة في الإعدادات."));
+            return;
+        }
+        if (!LocState.has) {
+            toast(tr("Waiting for your position\u2026", "آپ کے مقام کا انتظار\u2026", "بانتظار موقعك\u2026"));
+            return;
+        }
+        if (downloading) return;
+        downloading = true;
+        final double lat = LocState.lat;
+        final double lon = LocState.lon;
+        final Namer.Info at = info;
+        setDlStatus(tr("Downloading\u2026 this can take up to a minute.", "ڈاؤن لوڈ ہو رہا ہے\u2026 ایک منٹ تک لگ سکتا ہے۔",
+                "جارٍ التنزيل\u2026 قد يستغرق حتى دقيقة."));
+        new Thread(() -> {
+            try {
+                String json = Overpass.fetch(Overpass.query(lat, lon, radiusKm * 1000, scope));
+                List<Place> list = Overpass.parse(json);
+                Db db = Db.get(MainActivity.this);
+                String label = (at != null && at.place != null) ? labelOf(at.place) : Geo.fmtPlain(lat, lon);
+                long pid = db.addPack(label, lat, lon, radiusKm, scope, System.currentTimeMillis());
+                int added = db.addPlaces(pid, list);
+                db.setPackCount(pid, added);
+                final String msg = String.format(Locale.US, tr("Done: %1$d places saved (%2$d were already stored).",
+                        "مکمل: %1$d مقامات محفوظ ہوئے (%2$d پہلے سے موجود تھے)۔",
+                        "تم: حُفظ %1$d مكانًا (%2$d موجودة مسبقًا)."), added, list.size() - added);
+                runUi(() -> {
+                    downloading = false;
+                    setDlStatus(msg);
+                    requestNamer(true);
+                    if (cur == 0) loadNearby();
+                    if (cur == 2) refreshPacks();
+                });
+            } catch (Exception e) {
+                final String m = String.valueOf(e.getMessage());
+                runUi(() -> {
+                    downloading = false;
+                    setDlStatus(tr("Download failed: ", "ڈاؤن لوڈ ناکام: ", "فشل التنزيل: ") + m);
+                });
+            }
+        }).start();
+    }
+
+    // ------------------------------------------------------------------ Settings tab
+
+    private View buildSettings() {
+        pLang = Store.lang(this);
+        pTheme = Store.theme(this);
+        pBg = Store.bg(this);
+        pBoot = Store.onBoot(this);
+        pOnline = Store.online(this);
+        pInterval = Store.interval(this);
+
+        ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(bg);
+        LinearLayout box = vbox();
+        box.setPadding(dp(12), dp(10), dp(12), dp(16));
+        sv.addView(box);
+
+        final String[] langV = {"en", "ur", "ar"};
+        LinearLayout s1 = section(box, tr("Language", "زبان", "اللغة"));
+        addChips(s1, new String[]{"English", "اردو", "العربية"}, indexOf(langV, pLang), k -> pLang = langV[k]);
+
+        final String[] themeV = {"dark", "light"};
+        LinearLayout s2 = section(box, tr("Theme", "تھیم", "المظهر"));
+        addChips(s2, new String[]{tr("Dark", "ڈارک", "داكن"), tr("Light", "لائٹ", "فاتح")},
+                indexOf(themeV, pTheme), k -> pTheme = themeV[k]);
+
+        String on = tr("On", "آن", "تشغيل");
+        String off = tr("Off", "آف", "إيقاف");
+        LinearLayout s3 = section(box, tr("Run in background (notification)", "پس منظر میں چلائیں (نوٹیفیکیشن)",
+                "التشغيل في الخلفية (إشعار)"));
+        addChips(s3, new String[]{on, off}, pBg ? 0 : 1, k -> pBg = (k == 0));
+        note(s3, tr("Keeps following your position after you press Home and shows the place name in a notification.",
+                "ہوم دبانے کے بعد بھی آپ کا مقام فالو کرتی رہتی ہے اور نوٹیفیکیشن میں جگہ کا نام دکھاتی ہے۔",
+                "تستمر في تتبع موقعك بعد الضغط على الرئيسية وتعرض اسم المكان في إشعار."));
+
+        final int[] iv = {2, 5, 10, 30, 60};
+        String sec = tr("s", "سیکنڈ", "ث");
+        String[] il = new String[iv.length];
+        for (int i = 0; i < iv.length; i++) il[i] = iv[i] + " " + sec;
+        LinearLayout s4 = section(box, tr("Position update interval", "مقام اپ ڈیٹ کا وقفہ", "فترة تحديث الموقع"));
+        addChips(s4, il, indexOfInt(iv, pInterval), k -> pInterval = iv[k]);
+        note(s4, tr("Longer intervals save battery.", "لمبا وقفہ بیٹری بچاتا ہے۔", "الفترات الأطول توفر البطارية."));
+
+        LinearLayout s5 = section(box, tr("Start when the phone boots", "فون چلنے پر شروع کریں", "البدء عند تشغيل الهاتف"));
+        addChips(s5, new String[]{on, off}, pBoot ? 0 : 1, k -> pBoot = (k == 0));
+
+        LinearLayout s6 = section(box, tr("Online features", "آن لائن فیچرز", "الميزات عبر الإنترنت"));
+        addChips(s6, new String[]{on, off}, pOnline ? 0 : 1, k -> pOnline = (k == 0));
+        note(s6, tr("Only used when you press Download or Update. Turn off to never contact the internet.",
+                "صرف تب استعمال ہوتے ہیں جب آپ ڈاؤن لوڈ یا اپ ڈیٹ دبائیں۔ انٹرنیٹ سے کبھی رابطہ نہ کرنے کے لیے بند کریں۔",
+                "تُستخدم فقط عند الضغط على تنزيل أو تحديث. أوقفها كي لا يتصل التطبيق بالإنترنت أبدًا."));
+
+        TextView save = button(tr("Save", "محفوظ کریں", "حفظ"), ACC, ON_ACC, v -> saveSettings());
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(MATCH, WRAP);
+        sp.setMargins(0, dp(2), 0, dp(12));
+        box.addView(save, sp);
+
+        LinearLayout s7 = section(box, tr("Background tips", "پس منظر کے لیے ہدایات", "نصائح للعمل في الخلفية"));
+        note(s7, tr("For reliable background tracking: allow notifications, choose \"Allow all the time\" for location, and remove battery restrictions. On Xiaomi/Oppo/Vivo/Huawei phones also enable Autostart.",
+                "پس منظر میں بھروسے مند ٹریکنگ کے لیے: نوٹیفیکیشن کی اجازت دیں، لوکیشن میں \"ہر وقت اجازت\" چنیں، اور بیٹری کی پابندی ہٹائیں۔ Xiaomi/Oppo/Vivo/Huawei فونز میں Autostart بھی آن کریں۔",
+                "لتتبع موثوق في الخلفية: اسمح بالإشعارات، واختر «السماح طوال الوقت» للموقع، وأزل قيود البطارية. وفي هواتف Xiaomi/Oppo/Vivo/Huawei فعّل التشغيل التلقائي (Autostart) أيضًا."));
+        addWide(s7, tr("Allow location all the time", "لوکیشن ہر وقت کی اجازت", "السماح بالموقع طوال الوقت"), chipBg, txt,
+                v -> requestBackgroundLocation());
+        addWide(s7, tr("Battery settings", "بیٹری سیٹنگز", "إعدادات البطارية"), chipBg, txt, v -> openBatterySettings());
+        addWide(s7, tr("App permissions", "ایپ کی اجازتیں", "أذونات التطبيق"), chipBg, txt, v -> openAppSettings());
+
+        LinearLayout s8 = section(box, tr("Privacy", "رازداری", "الخصوصية"));
+        note(s8, tr("Your position stays on this phone. Downloads send the center of the area you choose (your approximate position) to the OpenStreetMap Overpass servers, only when you press Download or Update. Map apps opened from the list receive that place's coordinates. Nothing else is sent. Place names mostly come from OpenStreetMap and may be in English or the local language.",
+                "آپ کا مقام اسی فون پر رہتا ہے۔ ڈاؤن لوڈ تب ہی OpenStreetMap Overpass سرورز کو آپ کے چنے ہوئے علاقے کا مرکز (آپ کا تقریبی مقام) بھیجتا ہے جب آپ ڈاؤن لوڈ یا اپ ڈیٹ دبائیں۔ فہرست سے کھلنے والی نقشہ ایپ کو اس مقام کے کوآرڈینیٹ ملتے ہیں۔ اس کے علاوہ کچھ نہیں بھیجا جاتا۔ جگہوں کے نام زیادہ تر OpenStreetMap سے آتے ہیں اور انگریزی یا مقامی زبان میں ہو سکتے ہیں۔",
+                "يبقى موقعك على هذا الهاتف. ترسل التنزيلات مركز المنطقة التي تختارها (موقعك التقريبي) إلى خوادم OpenStreetMap Overpass فقط عند الضغط على تنزيل أو تحديث. تستقبل تطبيقات الخرائط المفتوحة من القائمة إحداثيات ذلك المكان. لا يُرسل شيء آخر. أسماء الأماكن تأتي غالبًا من OpenStreetMap وقد تكون بالإنجليزية أو باللغة المحلية."));
+        return sv;
+    }
+
+    private void saveSettings() {
+        Store.setLang(this, pLang);
+        Store.setTheme(this, pTheme);
+        Store.setBg(this, pBg);
+        Store.setInterval(this, pInterval);
+        Store.setOnBoot(this, pBoot);
+        Store.setOnline(this, pOnline);
+        Notifier.ensureChannel(this);
+        cur = 3;
+        build();
+        toast(tr("Saved \u2713", "محفوظ ہو گیا \u2713", "تم الحفظ \u2713"));
+        if (pBg) {
+            if (Build.VERSION.SDK_INT >= 33 && notifPermMissing()) askPerms();
+            startTrackService();
+        } else {
+            stopTrackService();
+        }
+    }
+
+    // ------------------------------------------------------------------ exit
+
+    private void confirmExit() {
+        LinearLayout box = vbox();
+        box.setBackground(rounded(card, 16));
+        box.setPadding(dp(20), dp(18), dp(20), dp(16));
+        box.addView(tv(tr("Exit?", "باہر نکلیں؟", "الخروج؟"), 18, txt, true));
+        final boolean running = Store.bg(this) && LocClient.hasPerm(this);
+        String msg = tr("Close PoiPlaces?", "PoiPlaces بند کریں؟", "إغلاق PoiPlaces؟");
+        if (running) {
+            msg += "\n" + tr("Background tracking and the notification can keep running.",
+                    "پس منظر کی ٹریکنگ اور نوٹیفیکیشن چلتے رہ سکتے ہیں۔",
+                    "يمكن أن يستمر التتبع في الخلفية والإشعار.");
+        }
+        TextView m = tv(msg, 14, sub, false);
+        m.setPadding(0, dp(8), 0, dp(6));
+        box.addView(m);
+        final Dialog d = makeDialog(box);
+        if (running) {
+            addWide(box, tr("Exit (keep running)", "باہر نکلیں (چلتا رہے)", "خروج (استمرار العمل)"), ACC, ON_ACC, v -> {
+                d.dismiss();
+                finish();
+            });
+            addWide(box, tr("Exit and stop background", "باہر نکلیں اور پس منظر بند کریں", "خروج وإيقاف الخلفية"), chipBg, txt, v -> {
+                d.dismiss();
+                stopTrackService();
+                finish();
+            });
+        } else {
+            addWide(box, tr("Yes, exit", "ہاں، باہر نکلیں", "نعم، خروج"), ACC, ON_ACC, v -> {
+                d.dismiss();
+                finish();
+            });
+        }
+        addWide(box, tr("Cancel", "منسوخ", "إلغاء"), chipBg, sub, v -> d.dismiss());
+        showWide(d);
+    }
+}
