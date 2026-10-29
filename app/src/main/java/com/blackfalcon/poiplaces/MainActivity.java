@@ -63,7 +63,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
     private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
     private static final int ACC = 0xFF00BFA5;
     // Tropical Rainforest green, used for the live direction arrows.
-    private static final int ARROW_COLOR = 0xFF00755E;
+    private static final int ARROW_COLOR = 0xFF00A878; // Brighter Tropical Rainforest green
     private static final int ON_ACC = 0xFF000000;
     private static final int RC_PERM = 100;
     private static final int RC_BG = 101;
@@ -987,7 +987,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
         h.addView(upd, up);
 
         TextView saveAll = button(tr("Save all nearby places", "تمام قریبی مقامات محفوظ کریں",
-                "حفظ جميع الأماكن القريبة"), ARROW_COLOR, 0xFFFFFFFF, v -> saveAllNearbyPlaces());
+                "حفظ جميع الأماكن القريبة"), 0xFF00755E, 0xFFFFFFFF, v -> saveAllNearbyPlaces());
         LinearLayout.LayoutParams saveAllParams = new LinearLayout.LayoutParams(MATCH, WRAP);
         saveAllParams.setMargins(dp(3), dp(6), dp(3), 0);
         h.addView(saveAll, saveAllParams);
