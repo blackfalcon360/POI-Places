@@ -130,7 +130,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
 
     // Nearby tab
     private String nearFilter = "all";
-    private int nearRadius = 25;
+    private int nearRadius = 5;
     private RowAdapter nearAd;
     private TextView nearInfo;
     private int nearReq = 0;
@@ -971,7 +971,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
             loadNearby();
         });
 
-        final int[] rv = {5, 25, 100, 500};
+        final int[] rv = {5, 10, 15, 20};
         String km = tr("km", "کلومیٹر", "كم");
         String[] rl = new String[rv.length];
         for (int i = 0; i < rv.length; i++) rl[i] = rv[i] + " " + km;
