@@ -971,7 +971,7 @@ public class MainActivity extends Activity implements LocClient.Cb {
             loadNearby();
         });
 
-        final int[] rv = {5, 10, 15, 20};
+        final int[] rv = {3, 5, 10, 15, 20};
         String km = tr("km", "کلومیٹر", "كم");
         String[] rl = new String[rv.length];
         for (int i = 0; i < rv.length; i++) rl[i] = rv[i] + " " + km;
@@ -991,6 +991,12 @@ public class MainActivity extends Activity implements LocClient.Cb {
         LinearLayout.LayoutParams saveAllParams = new LinearLayout.LayoutParams(MATCH, WRAP);
         saveAllParams.setMargins(dp(3), dp(6), dp(3), 0);
         h.addView(saveAll, saveAllParams);
+
+        TextView mosques = button(tr("Nearby mosques", "قریبی مساجد", "المساجد القريبة"), ACC, ON_ACC,
+                v -> loadNearbyMosques());
+        LinearLayout.LayoutParams mosqueParams = new LinearLayout.LayoutParams(MATCH, WRAP);
+        mosqueParams.setMargins(dp(3), dp(6), dp(3), 0);
+        h.addView(mosques, mosqueParams);
 
         nearInfo = tv("", 13, sub, false);
         nearInfo.setPadding(dp(4), dp(8), dp(4), dp(2));
@@ -1067,6 +1073,77 @@ public class MainActivity extends Activity implements LocClient.Cb {
                             shown.size(), L.dist(MainActivity.this, rad)));
                 }
             });
+        });
+    }
+
+    /** Fetches nearby mosques independently from the general POI radius/filter. */
+    private void loadNearbyMosques() {
+        if (nearAd == null || cur != 0) return;
+        if (!Store.online(this)) {
+            toast(tr("Online features are turned off in Settings.", "آن لائن فیچرز سیٹنگز میں بند ہیں۔",
+                    "الميزات عبر الإنترنت متوقفة في الإعدادات."));
+            return;
+        }
+        if (!LocState.has) {
+            toast(tr("Waiting for your position…", "آپ کے مقام کا انتظار ہے…", "بانتظار موقعك…"));
+            return;
+        }
+        final double lat = LocState.lat;
+        final double lon = LocState.lon;
+        final int req = ++nearReq;
+        nearLat = lat;
+        nearLon = lon;
+        nearInfo.setText(tr("Searching for nearby mosques…", "قریبی مساجد تلاش ہو رہی ہیں…",
+                "جارٍ البحث عن المساجد القريبة…"));
+        runBg(() -> {
+            try {
+                // Search a 5 km area; nearby results are sorted by distance, so mosques
+                // only a few metres away appear at the top when OpenStreetMap has them.
+                int radiusMeters = 5000;
+                String q = "[out:json][timeout:30];(node[\"amenity\"=\"place_of_worship\"][\"religion\"=\"muslim\"](around:" + radiusMeters + "," + lat + "," + lon + ");"
+                        + "way[\"amenity\"=\"place_of_worship\"][\"religion\"=\"muslim\"](around:" + radiusMeters + "," + lat + "," + lon + ");"
+                        + "relation[\"amenity\"=\"place_of_worship\"][\"religion\"=\"muslim\"](around:" + radiusMeters + "," + lat + "," + lon + ");"
+                        + "node[\"building\"=\"mosque\"](around:" + radiusMeters + "," + lat + "," + lon + ");"
+                        + "way[\"building\"=\"mosque\"](around:" + radiusMeters + "," + lat + "," + lon + "););out center tags;";
+                List<Place> places = Overpass.parse(Overpass.fetch(q));
+                ArrayList<Row> rows = new ArrayList<Row>();
+                for (Place p : places) {
+                    double d = Geo.km(lat, lon, p.lat, p.lon);
+                    if (d > 5.0) continue;
+                    Row r = new Row();
+                    r.place = p;
+                    r.lat = p.lat;
+                    r.lon = p.lon;
+                    r.dist = d;
+                    r.icon = "🕌";
+                    r.title = labelOf(p);
+                    r.sub = L.cat(MainActivity.this, p.sub) + (p.country.length() > 0 ? ", " + p.country : "");
+                    rows.add(r);
+                }
+                Collections.sort(rows, (a, b) -> Double.compare(a.dist, b.dist));
+                Set<String> seen = new HashSet<String>();
+                ArrayList<Row> unique = new ArrayList<Row>();
+                for (Row r : rows) {
+                    String key = r.title.toLowerCase(Locale.US) + "|" + Math.round(r.lat * 100000) + "|" + Math.round(r.lon * 100000);
+                    if (seen.add(key)) unique.add(r);
+                }
+                runUi(() -> {
+                    if (req != nearReq || nearAd == null) return;
+                    nearAd.set(unique);
+                    nearInfo.setText(unique.isEmpty()
+                            ? tr("No mapped mosques found nearby. Results depend on OpenStreetMap data.",
+                                 "قریب میں نقشے پر درج مسجد نہیں ملی۔ نتائج OpenStreetMap کے ڈیٹا پر منحصر ہیں۔",
+                                 "لم يتم العثور على مساجد مسجلة قريبًا. تعتمد النتائج على بيانات OpenStreetMap.")
+                            : String.format(Locale.US, tr("%1$d mosques within 5 km · nearest first",
+                                 "5 کلومیٹر کے اندر %1$d مساجد · قریب ترین پہلے",
+                                 "%1$d مسجد ضمن 5 كم · الأقرب أولًا"), unique.size()));
+                });
+            } catch (Exception e) {
+                runUi(() -> {
+                    if (req != nearReq || nearAd == null) return;
+                    nearInfo.setText(tr("Mosque search failed: ", "مساجد کی تلاش ناکام: ", "فشل البحث عن المساجد: ") + e.getMessage());
+                });
+            }
         });
     }
 
